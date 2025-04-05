@@ -35,16 +35,13 @@ Built with Python, `pytubefix` for YouTube interaction, and `CustomTkinter` for 
 *(Here you can add your screenshots. Replace the descriptive text with the Markdown image syntax)*
 
 **Single URL Mode:**
-![Placeholder: Main interface in URL mode](placeholder_url_mode.png "Interface in URL Mode")
+![Placeholder: Main interface in URL mode](img/single-url.png "Interface in URL Mode")
 
 **Batch Search Mode:**
-![Placeholder: Main interface in Batch mode](placeholder_batch_mode.png "Interface in Batch Mode")
+![Placeholder: Main interface in Batch mode](img/batch-url.png "Interface in Batch Mode")
 
 **Quality Selection (URL Mode):**
-![Placeholder: Quality selection dropdown](placeholder_quality_selection.png "Quality Selection")
-
-**Download Progress:**
-![Placeholder: Progress bar during download](placeholder_download_progress.png "Download Progress")
+![Placeholder: Quality selection dropdown](img/quality-select.png "Quality Selection")
 
 ## 🛠️ Installation
 
@@ -52,8 +49,8 @@ You need to have **Python 3.8 or higher** installed on your system.
 
 1.  **Clone the repository (or download the ZIP):**
     ```bash
-    git clone https://github.com/YourUsername/YourRepoName.git # Replace with your URL
-    cd YourRepoName
+    git clone https://github.com/Nikoxx99/BetterYoutubeDownloader.git # Replace with your URL
+    cd BetterYoutubeDownloader
     ```
 
 2.  **(Optional but recommended) Create a virtual environment:**
