@@ -3,6 +3,7 @@ import tkinter.filedialog
 import customtkinter as ctk
 import threading
 import os
+import subprocess
 from pytubefix import YouTube, Search
 import urllib.error
 import re
@@ -564,25 +565,48 @@ class App(ctk.CTk):
         """Task that runs in thread to get qualities."""
         try:
             yt = YouTube(url)
-            # Prioritize progressive (video+audio) MP4 streams
-            streams = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc()
+            
+            # Get both progressive and adaptive streams
+            stream_map = {}
+            quality_options = []
+            
+            # First, get progressive streams (video+audio in one file)
+            progressive_streams = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc()
+            for s in progressive_streams:
+                if s.resolution not in stream_map:
+                    stream_map[s.resolution] = {
+                        'type': 'progressive',
+                        'video_stream': s,
+                        'audio_stream': None,
+                        'filesize_mb': s.filesize_mb
+                    }
+            
+            # Then, get adaptive video streams (higher quality)
+            adaptive_video_streams = yt.streams.filter(adaptive=True, only_video=True, file_extension='mp4').order_by('resolution').desc()
+            # Get the best audio stream for adaptive downloads
+            best_audio = yt.streams.filter(adaptive=True, only_audio=True).order_by('abr').desc().first()
+            
+            for s in adaptive_video_streams:
+                if s.resolution and s.resolution not in stream_map and best_audio:
+                    # Calculate approximate combined file size
+                    combined_size = s.filesize_mb + (best_audio.filesize_mb if best_audio.filesize_mb else 0)
+                    stream_map[s.resolution] = {
+                        'type': 'adaptive',
+                        'video_stream': s,
+                        'audio_stream': best_audio,
+                        'filesize_mb': combined_size
+                    }
 
-            if not streams:
-                # Try adaptive if progressive fails? For now, fail
+            if not stream_map:
                 message = self.texts["status_no_mp4"].format(title=yt.title[:30])
                 self.after(0, self._update_ui_after_fetch, None, message, None, url)
                 return
 
-            stream_map = {}
-            quality_options = []
-            # Store stream object with formatted display string
-            stream_map_display = {}
-            for s in streams:
-                if s.resolution not in stream_map:  # Avoid duplicate resolutions
-                    display_text = f"{s.resolution} ({s.filesize_mb:.1f} MB)"
-                    stream_map[s.resolution] = s  # Map resolution ('720p') to stream
-                    stream_map_display[display_text] = s  # Map display text to stream
-                    quality_options.append(display_text)  # List for combobox
+            # Create quality options list
+            for resolution, stream_info in stream_map.items():
+                stream_type = " (Progresivo)" if stream_info['type'] == 'progressive' else " (Alta calidad)"
+                display_text = f"{resolution} ({stream_info['filesize_mb']:.1f} MB){stream_type}"
+                quality_options.append(display_text)
 
             if not quality_options:
                 message = self.texts["status_no_qualities"].format(title=yt.title[:30])
@@ -617,18 +641,16 @@ class App(ctk.CTk):
         self.status_label.configure(text=status_message, text_color="green" if stream_map else "red")
 
         if stream_map and quality_options:
-            self.available_video_streams = stream_map  # Save resolution -> stream map
-            # Prepare display values like "720p (XX MB)"
-            display_options = [f"{res} ({s.filesize_mb:.1f} MB)" for res, s in stream_map.items()]
-            # Sort options by resolution
+            self.available_video_streams = stream_map  # Save resolution -> stream info map
+            # Sort options by resolution (highest first)
             try:
-                display_options.sort(key=lambda x: int(re.match(r"(\d+)p", x).group(1)), reverse=True)
+                quality_options.sort(key=lambda x: int(re.match(r"(\d+)p", x).group(1)), reverse=True)
             except:
                 pass  # Ignore sorting errors if format unexpected
 
-            self.quality_combobox.configure(values=display_options)
-            if display_options:
-                self.selected_quality.set(display_options[0])  # Select the first (highest) by default
+            self.quality_combobox.configure(values=quality_options)
+            if quality_options:
+                self.selected_quality.set(quality_options[0])  # Select the first (highest) by default
             else:
                 self.selected_quality.set("")  # Shouldn't happen if quality_options is valid
 
@@ -670,6 +692,28 @@ class App(ctk.CTk):
                 self.after(0, self.update_progress, percentage)
         except Exception as e:
             self.after(0, self.update_progress_label_only, self.texts["progress"])
+
+    def adaptive_progress_callback(self, stream, chunk, bytes_remaining, phase="video", total_phases=2):
+        """Callback for adaptive download progress (video + audio)."""
+        try:
+            total_size = stream.filesize
+            if total_size is None or total_size == 0:
+                return
+            
+            bytes_downloaded = total_size - bytes_remaining
+            stream_percentage = (bytes_downloaded / total_size) * 100
+            
+            # Calculate overall progress considering both video and audio phases
+            if phase == "video":
+                # Video is first phase (0-50%)
+                overall_percentage = stream_percentage * 0.5
+            else:  # audio
+                # Audio is second phase (50-100%)
+                overall_percentage = 50 + (stream_percentage * 0.5)
+            
+            self.after(0, self.update_progress, overall_percentage)
+        except Exception as e:
+            pass
 
     def update_progress(self, percentage):
         """Updates progress bar and percentage label."""
@@ -900,26 +944,51 @@ class App(ctk.CTk):
             elif download_type == "video":
                 # In batch mode or URL mode with quality selected
                 if video_quality:  # We have a specific quality target
-                    # Get the exact stream based on quality key (e.g., '720p')
-                    stream_map_local = {s.resolution: s for s in yt.streams.filter(progressive=True, file_extension='mp4')}
-                    stream = stream_map_local.get(video_quality)
-                    if stream:
+                    # Check if we have stream info for this quality
+                    if hasattr(self, 'available_video_streams') and video_quality in self.available_video_streams:
+                        stream_info = self.available_video_streams[video_quality]
+                        stream = stream_info['video_stream']
+                        audio_stream = stream_info['audio_stream']
+                        stream_type = stream_info['type']
                         file_extension = ".mp4"
                         status_type = f"video ({video_quality})"
                     else:
-                        # Fallback if specific quality wasn't found
-                        self.after(0, self.update_status, 
-                                  self.texts["status_quality_not_found"].format(
-                                      prefix=prefix, quality=video_quality
-                                  ), "orange")
-                        stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+                        # Fallback: try to get streams directly from YouTube object
+                        # First try progressive
+                        stream_map_local = {s.resolution: s for s in yt.streams.filter(progressive=True, file_extension='mp4')}
+                        stream = stream_map_local.get(video_quality)
                         if stream:
+                            stream_info = {'type': 'progressive', 'video_stream': stream, 'audio_stream': None}
+                            stream_type = 'progressive'
+                            audio_stream = None
                             file_extension = ".mp4"
-                            status_type = f"video ({stream.resolution} - highest)"
+                            status_type = f"video ({video_quality})"
                         else:
-                            self.after(0, self.update_status, 
-                                      self.texts["status_no_mp4_stream"].format(prefix=prefix), "red")
-                            return False
+                            # Try adaptive
+                            adaptive_video = yt.streams.filter(adaptive=True, only_video=True, file_extension='mp4', resolution=video_quality).first()
+                            best_audio = yt.streams.filter(adaptive=True, only_audio=True).order_by('abr').desc().first()
+                            if adaptive_video and best_audio:
+                                stream = adaptive_video
+                                audio_stream = best_audio
+                                stream_type = 'adaptive'
+                                file_extension = ".mp4"
+                                status_type = f"video ({video_quality})"
+                            else:
+                                # Final fallback
+                                self.after(0, self.update_status, 
+                                          self.texts["status_quality_not_found"].format(
+                                              prefix=prefix, quality=video_quality
+                                          ), "orange")
+                                stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+                                if stream:
+                                    stream_type = 'progressive'
+                                    audio_stream = None
+                                    file_extension = ".mp4"
+                                    status_type = f"video ({stream.resolution} - highest)"
+                                else:
+                                    self.after(0, self.update_status, 
+                                              self.texts["status_no_mp4_stream"].format(prefix=prefix), "red")
+                                    return False
                 else:  # No specific quality given (shouldn't happen for video in single mode)
                     self.after(0, self.update_status, 
                               self.texts["status_internal_error"].format(prefix=prefix), "red")
@@ -942,33 +1011,190 @@ class App(ctk.CTk):
                       self.texts["status_downloading"].format(
                           prefix=prefix, type=status_type, title=yt.title[:30]
                       ), "orange")
-            # Download with a temporary name or let pytube decide
-            downloaded_file_path = stream.download(output_path=save_path)
-            actual_downloaded_filename = os.path.basename(downloaded_file_path)
-
-            # --- Rename/Move to desired final name ---
-            final_filename_to_show = actual_downloaded_filename  # Default if rename fails
-            rename_needed = downloaded_file_path != final_file_path
-
-            if rename_needed:
+            
+            # Initialize variables
+            final_filename_to_show = output_filename
+            rename_success = False
+            
+            # Handle different stream types
+            if download_type == "video" and 'stream_type' in locals() and stream_type == 'adaptive':
+                # Download video and audio separately, then combine with FFmpeg
                 try:
-                    # Ensure target does not exist
-                    if os.path.exists(final_file_path):
-                        os.remove(final_file_path)
-                    os.rename(downloaded_file_path, final_file_path)
-                    final_filename_to_show = output_filename
-                    rename_success = True
-                except OSError as e:
-                    print(f"Error renaming file to {output_filename}: {e}")
+                    # Create temporary filenames
+                    temp_video_path = os.path.join(save_path, f"temp_video_{base_filename}.mp4")
+                    temp_audio_path = os.path.join(save_path, f"temp_audio_{base_filename}.mp4")
+                    
+                    # Download video stream with progress
                     self.after(0, self.update_status, 
-                              self.texts["status_download_renamed"].format(
-                                  prefix=prefix, filename=final_filename_to_show
-                              ), "orange")
-                    rename_success = False
+                              f"{prefix}Descargando video ({video_quality})...", "orange")
+                    
+                    # Create a custom callback for video download
+                    def video_progress_callback(stream, chunk, bytes_remaining):
+                        self.adaptive_progress_callback(stream, chunk, bytes_remaining, "video")
+                    
+                    # Temporarily replace the callback
+                    original_callback = getattr(stream, '_on_progress', None)
+                    stream._on_progress = video_progress_callback
+                    video_path = stream.download(output_path=save_path, filename=f"temp_video_{base_filename}")
+                    
+                    # Download audio stream with progress
+                    self.after(0, self.update_status, 
+                              f"{prefix}Descargando audio...", "orange")
+                    
+                    # Create a custom callback for audio download
+                    def audio_progress_callback(stream, chunk, bytes_remaining):
+                        self.adaptive_progress_callback(stream, chunk, bytes_remaining, "audio")
+                    
+                    # Set callback for audio
+                    audio_stream._on_progress = audio_progress_callback
+                    audio_path = audio_stream.download(output_path=save_path, filename=f"temp_audio_{base_filename}")
+                    
+                    # Combine using FFmpeg
+                    self.after(0, self.update_status, 
+                              f"{prefix}Combinando video y audio...", "orange")
+                    self.after(0, self.update_progress, 90.0)  # Show progress during combination
+                    
+                    # Check if FFmpeg is available
+                    try:
+                        # Try to run FFmpeg
+                        result = subprocess.run([
+                            'ffmpeg', '-i', video_path, '-i', audio_path, 
+                            '-c:v', 'copy', '-c:a', 'aac', '-y', final_file_path
+                        ], capture_output=True, text=True, timeout=300)
+                        
+                        if result.returncode == 0:
+                            # Success - clean up temp files
+                            try:
+                                os.remove(video_path)
+                                os.remove(audio_path)
+                            except:
+                                pass
+                            final_filename_to_show = output_filename
+                            rename_success = True
+                        else:
+                            # FFmpeg failed - fallback to video only
+                            self.after(0, self.update_status, 
+                                      f"{prefix}Error combinando. Guardando solo video...", "orange")
+                            try:
+                                os.remove(audio_path)
+                                os.rename(video_path, final_file_path)
+                                final_filename_to_show = output_filename
+                                rename_success = True
+                            except Exception as e:
+                                final_filename_to_show = os.path.basename(video_path)
+                                rename_success = False
+                                
+                    except (subprocess.TimeoutExpired, FileNotFoundError):
+                        # FFmpeg not available or timeout - fallback to video only
+                        self.after(0, self.update_status, 
+                                  f"{prefix}FFmpeg no disponible. Guardando solo video...", "orange")
+                        try:
+                            os.remove(audio_path)
+                            os.rename(video_path, final_file_path)
+                            final_filename_to_show = output_filename
+                            rename_success = True
+                        except Exception as e:
+                            final_filename_to_show = os.path.basename(video_path)
+                            rename_success = False
+                            
+                except Exception as e:
+                    # Fallback to progressive download
+                    self.after(0, self.update_status, 
+                              f"{prefix}Error en descarga adaptativa. Intentando progresiva...", "orange")
+                    downloaded_file_path = stream.download(output_path=save_path)
+                    if downloaded_file_path == final_file_path:
+                        final_filename_to_show = output_filename
+                        rename_success = True
+                    else:
+                        final_filename_to_show = os.path.basename(downloaded_file_path)
+                        rename_success = False
+                    
             else:
-                # Already downloaded with the correct name
-                final_filename_to_show = output_filename
-                rename_success = True
+                # Progressive download (normal case)
+                downloaded_file_path = stream.download(output_path=save_path)
+                
+                # If it's audio, convert to proper MP3 format using FFmpeg
+                if download_type == "audio":
+                    try:
+                        # Update status to show conversion
+                        self.after(0, self.update_status, 
+                                  f"{prefix}Convirtiendo a MP3 compatible...", "orange")
+                        self.after(0, self.update_progress, 85.0)
+                        
+                        # Use FFmpeg to convert to proper MP3 format
+                        result = subprocess.run([
+                            'ffmpeg', '-i', downloaded_file_path, 
+                            '-codec:a', 'libmp3lame', '-b:a', '192k', 
+                            '-y', final_file_path
+                        ], capture_output=True, text=True, timeout=120)
+                        
+                        if result.returncode == 0:
+                            # Success - clean up original file
+                            try:
+                                os.remove(downloaded_file_path)
+                            except:
+                                pass
+                            final_filename_to_show = output_filename
+                            rename_success = True
+                        else:
+                            # FFmpeg failed - fallback to rename
+                            self.after(0, self.update_status, 
+                                      f"{prefix}FFmpeg no disponible. Usando formato original...", "orange")
+                            if downloaded_file_path == final_file_path:
+                                final_filename_to_show = output_filename
+                                rename_success = True
+                            else:
+                                try:
+                                    if os.path.exists(final_file_path):
+                                        os.remove(final_file_path)
+                                    os.rename(downloaded_file_path, final_file_path)
+                                    final_filename_to_show = output_filename
+                                    rename_success = True
+                                except OSError as e:
+                                    print(f"Error renaming file to {output_filename}: {e}")
+                                    final_filename_to_show = os.path.basename(downloaded_file_path)
+                                    rename_success = False
+                                    
+                    except (subprocess.TimeoutExpired, FileNotFoundError):
+                        # FFmpeg not available or timeout - fallback to rename
+                        self.after(0, self.update_status, 
+                                  f"{prefix}FFmpeg no disponible. Usando formato original...", "orange")
+                        if downloaded_file_path == final_file_path:
+                            final_filename_to_show = output_filename
+                            rename_success = True
+                        else:
+                            try:
+                                if os.path.exists(final_file_path):
+                                    os.remove(final_file_path)
+                                os.rename(downloaded_file_path, final_file_path)
+                                final_filename_to_show = output_filename
+                                rename_success = True
+                            except OSError as e:
+                                print(f"Error renaming file to {output_filename}: {e}")
+                                final_filename_to_show = os.path.basename(downloaded_file_path)
+                                rename_success = False
+                else:
+                    # For video, use the original logic
+                    if downloaded_file_path == final_file_path:
+                        final_filename_to_show = output_filename
+                        rename_success = True
+                    else:
+                        # Need to rename
+                        try:
+                            # Ensure target does not exist
+                            if os.path.exists(final_file_path):
+                                os.remove(final_file_path)
+                            os.rename(downloaded_file_path, final_file_path)
+                            final_filename_to_show = output_filename
+                            rename_success = True
+                        except OSError as e:
+                            print(f"Error renaming file to {output_filename}: {e}")
+                            final_filename_to_show = os.path.basename(downloaded_file_path)
+                            self.after(0, self.update_status, 
+                                      self.texts["status_download_renamed"].format(
+                                          prefix=prefix, filename=final_filename_to_show
+                                      ), "orange")
+                            rename_success = False
 
             # --- Report Success ---
             if rename_success:
