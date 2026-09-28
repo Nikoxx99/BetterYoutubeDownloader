@@ -8,6 +8,16 @@ import subprocess
 import sys
 import shutil
 
+
+def remove_generated_directory(name):
+    """Remove only a generated directory inside this repository."""
+    repository = os.path.realpath(os.getcwd())
+    target = os.path.realpath(os.path.join(repository, name))
+    if os.path.commonpath((repository, target)) != repository or target == repository:
+        raise ValueError(f"Refusing to remove directory outside the repository: {target}")
+    if os.path.isdir(target):
+        shutil.rmtree(target)
+
 def build_executable():
     """Construye el ejecutable usando PyInstaller"""
     
@@ -16,15 +26,15 @@ def build_executable():
     # Limpiar builds anteriores
     if os.path.exists("build"):
         print("🧹 Limpiando directorio build...")
-        shutil.rmtree("build")
+        remove_generated_directory("build")
     
     if os.path.exists("dist"):
         print("🧹 Limpiando directorio dist...")
-        shutil.rmtree("dist")
+        remove_generated_directory("dist")
     
     # Comando PyInstaller
     cmd = [
-        "python", "-m", "PyInstaller",
+        sys.executable, "-m", "PyInstaller",
         "--onefile",                    # Un solo archivo ejecutable
         "--windowed",                   # Sin ventana de consola
         "--name=YouTube_Downloader",    # Nombre del ejecutable
@@ -50,7 +60,9 @@ def build_executable():
         "--hidden-import=re",
         "--hidden-import=subprocess",
         "--collect-all=customtkinter",  # Recopilar todos los archivos de customtkinter
-        "--collect-submodules=pytubefix", # Recopilar todos los submódulos de pytubefix
+        "--collect-all=pytubefix",     # Incluir los scripts JS de BotGuard
+        "--collect-all=nodejs_wheel",  # Incluir Node.js para el cliente WEB
+        "--collect-all=imageio_ffmpeg", # Incluir FFmpeg para MP3 y video con audio
         "--noconfirm",                 # No pedir confirmación
         "download.py"                  # Archivo principal
     ]
@@ -72,7 +84,7 @@ def build_executable():
             # Crear carpeta de distribución
             dist_folder = "YouTube_Downloader_Portable"
             if os.path.exists(dist_folder):
-                shutil.rmtree(dist_folder)
+                remove_generated_directory(dist_folder)
             
             os.makedirs(dist_folder)
             
@@ -119,7 +131,7 @@ def main():
     
     # Verificar que PyInstaller está instalado
     try:
-        subprocess.run(["python", "-m", "PyInstaller", "--version"], check=True, capture_output=True)
+        subprocess.run([sys.executable, "-m", "PyInstaller", "--version"], check=True, capture_output=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
         print("❌ Error: PyInstaller no está instalado")
         print("Ejecuta: pip install pyinstaller")
@@ -131,7 +143,7 @@ def main():
     if success:
         print("\n✨ Notas importantes:")
         print("• El ejecutable incluye todas las dependencias necesarias")
-        print("• Para calidades altas (720p+), instala FFmpeg siguiendo FFMPEG_SETUP.md")
+        print("• El ejecutable incluye FFmpeg para MP3 y MP4 con audio")
         print("• El ejecutable es portable - no requiere instalación")
         print("• Puedes distribuir la carpeta YouTube_Downloader_Portable completa")
     

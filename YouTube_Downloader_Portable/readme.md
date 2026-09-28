@@ -45,6 +45,12 @@ Built with Python, `pytubefix` for YouTube interaction, and `CustomTkinter` for 
 
 ## 🛠️ Installation
 
+### Windows portable
+
+Run `YouTube_Downloader_Portable/YouTube_Downloader.exe` from the repository. This build includes Python, Node.js and FFmpeg, so it can create MP3 files and MP4 files with sound without installing those tools separately.
+
+### From source
+
 You need to have **Python 3.8 or higher** installed on your system.
 
 1.  **Clone the repository (or download the ZIP):**
@@ -62,13 +68,17 @@ You need to have **Python 3.8 or higher** installed on your system.
     ```
 
 3.  **Install dependencies:**
-    The application requires the following libraries. You can install them using pip:
     ```bash
-    pip install pytubefix customtkinter CTkMessagebox
+    python -m pip install -r requirements.txt
     ```
-    *   `pytubefix`: For interacting with the YouTube API.
-    *   `customtkinter`: For the modern graphical user interface.
-    *   `CTkMessagebox`: For displaying dialog boxes and messages elegantly.
+
+    The requirements include `pytubefix>=11.1.0`. Its `WEB` client uses Node.js to generate a YouTube PO Token automatically; the current pytubefix package installs the Node.js runtime dependency. `imageio-ffmpeg` supplies FFmpeg on common platforms for real MP3 conversion and MP4 files with sound. See [FFMPEG_SETUP.md](FFMPEG_SETUP.md) if your platform does not have a bundled FFmpeg binary.
+
+## YouTube bot-detection error
+
+The application uses pytubefix's `WEB` client for URL checks, downloads and batch search. If YouTube returns a bot-detection error, the app shows a message suggesting another network or waiting before retrying. This response can indicate that YouTube has blocked the current connection or session; updating the app does not guarantee that YouTube will allow the request.
+
+For diagnosis, update the dependencies with `python -m pip install -U -r requirements.txt`, try the same public video in a browser on the same network, and retry later or from another network. If the browser also cannot play it, check whether the video itself is unavailable or restricted. The app does not sign in to YouTube or import browser cookies automatically. See the [pytubefix PO Token guide](https://pytubefix.readthedocs.io/en/latest/user/po_token.html) for current upstream limitations.
 
 ## ▶️ How to Use
 
